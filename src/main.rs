@@ -3,65 +3,14 @@ use crossterm::event::{read, Event, KeyCode, KeyEvent};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use std::io::stdout;
 use std::time::{Duration, Instant};
-use rand::Rng;
 
-struct Enemy {
-    x: usize,
-    y: usize,
-    spawn_time: Instant,
-    active: bool,
-}
+mod entities;
+mod ui;
+mod game;
 
-const WIDTH: usize = 150;
-const HEIGHT: usize = 30;
-
-fn draw(player_x: usize, player_y: usize, enemies: &Vec<Enemy>, coins: &Vec<(usize, usize)>, score: u32, now: Instant) {
-    let mut stdout = stdout();
-    stdout.execute(cursor::MoveTo(0, 0)).unwrap();
-
-    let mut buffer = String::new();
-    buffer.push_str(&format!("Score: {}\n", score));
-    buffer.push('+');
-    for _ in 0..WIDTH { buffer.push('-'); }
-    buffer.push('+');
-    buffer.push('\n');
-    for y in 0..HEIGHT {
-        buffer.push('|');
-        for x in 0..WIDTH {
-            if x == player_x && y == player_y {
-                buffer.push('@');
-            } else if let Some(enemy) = enemies.iter().find(|e| e.x == x && e.y == y) {
-                let blink_time = now.duration_since(enemy.spawn_time);
-                if !enemy.active {
-                    // Blink for 5s, visible for 250ms every 500ms
-                    if (blink_time.as_millis() / 250) % 2 == 0 {
-                        buffer.push('e');
-                    } else {
-                        buffer.push('.');
-                    }
-                } else {
-                    buffer.push('E');
-                }
-            } else if coins.contains(&(x, y)) {
-                buffer.push('$');
-            } else {
-                buffer.push('.');
-            }
-        }
-        buffer.push('|');
-        buffer.push('\n');
-    }
-    buffer.push('+');
-    for _ in 0..WIDTH { buffer.push('-'); }
-    buffer.push('+');
-    buffer.push('\n');
-    let formatted = buffer.replace('\n', "\r\n");
-    use std::io::Write;
-    stdout.write_all(formatted.as_bytes()).unwrap();
-    stdout.flush().unwrap();
-}
-
-
+use entities::{Enemy, Coin};
+use ui::{draw, WIDTH, HEIGHT};
+use game::{update_enemy_activation, move_enemies, spawn_enemy, spawn_coin, check_coin_collection};
 
 fn main() {
     let mut stdout = stdout();
@@ -75,10 +24,9 @@ fn main() {
     let enemy_move_interval = Duration::from_millis(300);
     let mut last_enemy_spawn = Instant::now();
     let enemy_spawn_interval = Duration::from_secs(15);
-    let mut coins: Vec<(usize, usize)> = Vec::new();
+    let mut coins: Vec<Coin> = Vec::new();
     let mut last_coin_spawn = Instant::now();
     let coin_spawn_interval = Duration::from_secs(10);
-    let mut rng = rand::thread_rng();
     let mut score: u32 = 0;
     let start_time = Instant::now();
     draw(x, y, &enemies, &coins, score, start_time);
@@ -100,59 +48,22 @@ fn main() {
         }
         // Move all active enemies toward player only if enough time has passed
         if last_enemy_move.elapsed() >= enemy_move_interval {
-            for enemy in enemies.iter_mut() {
-                let blink_time = now.duration_since(enemy.spawn_time);
-                if blink_time >= Duration::from_secs(5) {
-                    enemy.active = true;
-                }
-                if enemy.active {
-                    if enemy.x < x { enemy.x += 1; }
-                    else if enemy.x > x { enemy.x -= 1; }
-                    if enemy.y < y { enemy.y += 1; }
-                    else if enemy.y > y { enemy.y -= 1; }
-                }
-            }
+            update_enemy_activation(&mut enemies, now);
+            move_enemies(&mut enemies, x, y);
             last_enemy_move = Instant::now();
         }
         // Spawn a new enemy every 15 seconds
         if last_enemy_spawn.elapsed() >= enemy_spawn_interval {
-            let mut attempts = 0;
-            loop {
-                let ex = rng.gen_range(0..WIDTH);
-                let ey = rng.gen_range(0..HEIGHT);
-                // Only spawn if not on player, coins, or another enemy
-                if (ex != x || ey != y)
-                    && !coins.contains(&(ex, ey))
-                    && !enemies.iter().any(|e| e.x == ex && e.y == ey) {
-                    enemies.push(Enemy { x: ex, y: ey, spawn_time: now, active: false });
-                    break;
-                }
-                attempts += 1;
-                if attempts > 1000 { break; }
-            }
+            spawn_enemy(&mut enemies, now);
             last_enemy_spawn = Instant::now();
         }
         // Spawn a coin every 10 seconds at a random empty location
         if last_coin_spawn.elapsed() >= coin_spawn_interval {
-            let mut attempts = 0;
-            loop {
-                let coin_x = rng.gen_range(0..WIDTH);
-                let coin_y = rng.gen_range(0..HEIGHT);
-                // Only spawn if not on player, any enemy, or another coin
-                if (coin_x != x || coin_y != y)
-                    && !enemies.iter().any(|e| e.x == coin_x && e.y == coin_y)
-                    && !coins.contains(&(coin_x, coin_y)) {
-                    coins.push((coin_x, coin_y));
-                    break;
-                }
-                attempts += 1;
-                if attempts > 1000 { break; }
-            }
+            spawn_coin(&mut coins, &enemies);
             last_coin_spawn = Instant::now();
         }
         // Player collects coin
-        if let Some(idx) = coins.iter().position(|&(cx, cy)| cx == x && cy == y) {
-            coins.remove(idx);
+        if check_coin_collection(x, y, &mut coins) {
             score += 1;
         }
         draw(x, y, &enemies, &coins, score, now);
@@ -169,5 +80,3 @@ fn main() {
     // Print exit message below the grid
     println!("\nGame Over! The enemy caught you. Final score: {}. Goodbye!", score);
 }
-
-
